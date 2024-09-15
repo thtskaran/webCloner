@@ -1,24 +1,37 @@
 import os
 import time
-import json
+import logging
 import requests
-from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.firefox.service import Service
-from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse, urljoin
+import threading
+
+# Debug flag
+DEBUG = False
+
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.DEBUG if DEBUG else logging.INFO,
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
 
 # Configurations
 START_URL = 'http://tryst.link'  # Replace with the target URL
 WEBDRIVER_PATH = 'driver/geckodriver'  # Replace with the path to GeckoDriver
 SAVE_DIRECTORY = './cloned_site'
-DELAY_BETWEEN_LAUNCHES = 2  # Delay in seconds between launching browser instances
+MAX_WINDOWS = 6
+DELAY_BETWEEN_LAUNCHES = 5  # Delay in seconds between launching browser instances
 
 # Initialize WebDriver options
 options = Options()
 options.headless = True
-
 service = Service(WEBDRIVER_PATH)
 
 # Function to download content
@@ -28,9 +41,9 @@ def download_content(url, save_path):
         ensure_dir(os.path.dirname(save_path))
         with open(save_path, 'wb') as file:
             file.write(response.content)
-        print(f"Downloaded: {url} to {save_path}")
+        logging.info(f"Downloaded: {url} to {save_path}")
     except Exception as e:
-        print(f"Error downloading {url}: {e}")
+        logging.error(f"Error downloading {url}: {e}")
 
 # Function to ensure directory exists
 def ensure_dir(directory):
@@ -57,57 +70,77 @@ def generate_filename(url_path):
         filename += '.html'
     return filename
 
-# Function to enumerate site
-def enumerate_site(driver, url):
-    base_url, path = process_url(url)
-    visited_urls = set()
-    urls_to_visit = [url]
+visited_urls_lock = threading.Lock()  # Lock for thread-safe access to visited_urls
+visited_urls = set()
 
-    while urls_to_visit:
-        current_url = urls_to_visit.pop(0)
-
-        if current_url in visited_urls:
-            continue
-
-        driver.get(current_url)
-        time.sleep(DELAY_BETWEEN_LAUNCHES)  # Adding delay to ensure page loads completely
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        save_path = os.path.join(SAVE_DIRECTORY, generate_filename(path))
-        save_html(soup, save_path)
-
-        visited_urls.add(current_url)
-
-        # Extract and download images and scripts
-        for img in soup.find_all('img'):
-            src = img.get('src')
-            if src:
-                img_url = urljoin(base_url, src)
-                img_path = os.path.join(SAVE_DIRECTORY, urlparse(img_url).path.lstrip('/'))
-                download_content(img_url, img_path)
-
-        for script in soup.find_all('script'):
-            src = script.get('src')
-            if src:
-                script_url = urljoin(base_url, src)
-                script_path = os.path.join(SAVE_DIRECTORY, urlparse(script_url).path.lstrip('/'))
-                download_content(script_url, script_path)
-
-        # Add new links to visit list
-        for link in soup.find_all('a', href=True):
-            href = link['href']
-            linked_url = urljoin(base_url, href)
-            if linked_url.startswith(base_url) and linked_url not in visited_urls:
-                urls_to_visit.append(linked_url)
-
-# Start WebDriver instance
-try:
-    driver = webdriver.Firefox(service=service, options=options)
-    enumerate_site(driver, START_URL)
-finally:
-    # Close WebDriver instance
+def worker(driver, urls_to_visit):
     try:
-        driver.quit()
-    except Exception as e:
-        print(f"Error closing Firefox instance: {e}")
+        while True:
+            with visited_urls_lock:
+                if not urls_to_visit:
+                    break
+                current_url = urls_to_visit.pop(0)
+                if current_url in visited_urls:
+                    continue
+                visited_urls.add(current_url)
 
-print("Site cloning completed.")
+            base_url, path = process_url(current_url)
+            try:
+                driver.get(current_url)
+                time.sleep(DELAY_BETWEEN_LAUNCHES)  # Adding delay to ensure page loads completely
+                soup = BeautifulSoup(driver.page_source, 'html.parser')
+                save_path = os.path.join(SAVE_DIRECTORY, generate_filename(path))
+                save_html(soup, save_path)
+
+                # Extract and download images, scripts, and CSS
+                for tag, attribute, folder in [('img', 'src', ''), ('script', 'src', ''), ('link', 'href', 'css')]:
+                    for element in soup.find_all(tag):
+                        src = element.get(attribute)
+                        if src:
+                            resource_url = urljoin(base_url, src)
+                            resource_path = os.path.join(SAVE_DIRECTORY, folder, urlparse(resource_url).path.lstrip('/'))
+                            download_content(resource_url, resource_path)
+
+                # Add new links to visit list
+                with visited_urls_lock:
+                    for link in soup.find_all('a', href=True):
+                        href = link['href']
+                        linked_url = urljoin(base_url, href)
+                        if linked_url.startswith(base_url) and linked_url not in visited_urls:
+                            urls_to_visit.append(linked_url)
+            except Exception as e:
+                logging.error(f"Error processing URL {current_url}: {e}")
+    finally:
+        driver.quit()
+        logging.info("Closed driver for the current session")
+
+def setup_driver():
+    try:
+        driver = webdriver.Firefox(service=Service(WEBDRIVER_PATH), options=Options())
+        return driver
+    except Exception as e:
+        logging.error(f"Error starting Firefox instance: {e}")
+        return None
+
+def main():
+    urls_to_visit = [START_URL]
+    threads = []
+
+    with ThreadPoolExecutor(max_workers=MAX_WINDOWS) as executor:
+        for _ in range(MAX_WINDOWS):
+            driver = setup_driver()
+            if driver:
+                thread = executor.submit(worker, driver, urls_to_visit)
+                threads.append(thread)
+                time.sleep(DELAY_BETWEEN_LAUNCHES)  # Adding delay between launching instances
+
+        for task in as_completed(threads):
+            try:
+                task.result()
+            except Exception as e:
+                logging.error(f"Thread raised an exception: {e}")
+
+    logging.info("Site cloning completed.")
+
+if __name__ == "__main__":
+    main()
