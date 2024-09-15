@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.firefox.options import Options
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urljoin
 
 # Debug flag
@@ -25,6 +26,7 @@ START_URL = 'http://tryst.link'  # Replace with the target URL
 WEBDRIVER_PATH = 'driver/geckodriver'  # Replace with the path to GeckoDriver
 SAVE_DIRECTORY = './cloned_site'
 REQUEST_DELAY = 0.1  # Reduced delay between requests in seconds
+MAX_WORKERS = 10  # Number of threads for parallel downloading
 
 visited_urls = set()
 
@@ -59,6 +61,16 @@ def generate_filename(url_path):
         filename += '.html'
     return filename
 
+def download_resources(resource_list):
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_resource = {executor.submit(download_content, res[0], res[1]): res for res in resource_list}
+        for future in as_completed(future_to_resource):
+            res = future_to_resource[future]
+            try:
+                future.result()
+            except Exception as e:
+                logging.error(f"Error downloading resource {res[0]}: {e}")
+
 def worker(driver, urls_to_visit):
     while urls_to_visit:
         current_url = urls_to_visit.pop(0)
@@ -75,6 +87,7 @@ def worker(driver, urls_to_visit):
             save_path = os.path.join(SAVE_DIRECTORY, generate_filename(path))
             save_html(soup, save_path)
 
+            resource_list = []
             logging.debug(f"Extracting resources from URL: {current_url}")
             for tag, attribute, folder in [('img', 'src', ''), ('script', 'src', ''), ('link', 'href', 'css')]:
                 for element in soup.find_all(tag):
@@ -82,7 +95,9 @@ def worker(driver, urls_to_visit):
                     if src:
                         resource_url = urljoin(base_url, src)
                         resource_path = os.path.join(SAVE_DIRECTORY, folder, urlparse(resource_url).path.lstrip('/'))
-                        download_content(resource_url, resource_path)
+                        resource_list.append((resource_url, resource_path))
+
+            download_resources(resource_list)
 
             for link in soup.find_all('a', href=True):
                 href = link['href']
