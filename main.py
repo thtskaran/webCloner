@@ -84,7 +84,7 @@ def download_resources(resource_list, proxy=None, headers=None):
             except Exception as e:
                 logging.error(f"Error downloading resource {res[0]}: {e}")
 
-def worker(driver, urls_to_visit, proxy=None, headers=None):
+def worker(driver, urls_to_visit):
     start_time = time.time()
 
     while urls_to_visit:
@@ -128,7 +128,7 @@ def worker(driver, urls_to_visit, proxy=None, headers=None):
             save_html(soup, save_path)
 
             # Download the images
-            download_resources(resource_list, proxy, headers)
+            download_resources(resource_list)
 
             # Add new URLs to visit
             for link in soup.find_all('a', href=True):
@@ -195,7 +195,7 @@ def main():
     driver = setup_driver()
     if driver:
         while urls_to_visit:
-            worker(driver, urls_to_visit, proxy, headers)
+            worker(driver, urls_to_visit)
             
             logging.info("Paused for CDN download...")
 
