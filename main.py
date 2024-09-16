@@ -9,6 +9,7 @@ from selenium.webdriver.firefox.options import Options
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urljoin
 from base64 import b64encode
+import subprocess
 
 # Debug flag
 DEBUG = False
@@ -28,8 +29,8 @@ WEBDRIVER_PATH = 'driver/geckodriver'  # Replace with the path to GeckoDriver
 SAVE_DIRECTORY = './cloned_site'
 REQUEST_DELAY = 0.1  # Reduced delay between requests in seconds
 MAX_WORKERS = 10  # Number of threads for parallel downloading
-RUNNING_PERIOD = 300  # Running period before pausing for CDN download (in seconds)
-PAUSE_PERIOD = 300  # Pause period to download CDN resources (in seconds)
+RUNNING_PERIOD = 100  # Running period before pausing for CDN download (in seconds)
+PAUSE_PERIOD = 100  # Pause period to download CDN resources (in seconds)
 
 visited_urls = set()
 saved_files = set()
@@ -176,10 +177,28 @@ def download_cdn_resources(proxy, headers):
         return
     
     logging.info("Downloading CDN resources...")
-
-    resource_list = [(url, path) for url, path in cdn_links.items()]
-    download_resources(resource_list, proxy=proxy, headers=headers)
     
+    proxy_http = proxy["http"]
+    proxy_https = proxy["https"]
+
+    for url, path in cdn_links.items():
+        ensure_dir(os.path.dirname(path))
+        command = [
+            "wget",
+            "-e", f"use_proxy=yes",
+            "-e", f"http_proxy={proxy_http}",
+            "-e", f"https_proxy={proxy_https}",
+            "-O", path,
+            url
+        ]
+
+        try:
+            subprocess.run(command, check=True)
+            saved_files.add(path)
+            logging.info(f"Downloaded via wget: {url} to {path}")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Error downloading {url} via wget: {e}")
+
     logging.info("CDN resource download completed.")
 
 def main():
