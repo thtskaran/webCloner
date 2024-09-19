@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urljoin
 from base64 import b64encode
 import subprocess
+from collections import deque
 
 # Debug flag
 DEBUG = False
@@ -35,6 +36,7 @@ PAUSE_PERIOD = 100  # Pause period to download CDN resources (in seconds)
 visited_urls = set()
 saved_files = set()
 cdn_links = {}
+first_page_saved = False  # Flag to track if the first page has been saved
 
 def download_content(url, save_path, proxy=None, headers=None):
     if save_path in saved_files:
@@ -68,12 +70,27 @@ def process_url(url):
     return parsed_url.scheme + "://" + parsed_url.netloc, parsed_url.path
 
 def generate_filename(url_path):
-    filename = url_path.strip('/').replace('/', '_')
-    if not filename:
-        filename = 'index.html'
-    if not filename.endswith('.html'):
-        filename += '.html'
-    return filename
+    global first_page_saved
+    
+    if not first_page_saved:
+        first_page_saved = True
+        return os.path.join(SAVE_DIRECTORY, 'index.html')
+    
+    parts = url_path.strip('/').split('/')
+    
+    # Determine filename from last part
+    if parts and '.' in parts[-1]:
+        filename = parts.pop()  # Get the last part if it contains an extension
+    else:
+        filename = parts.pop() + '.html'  # Append .html to the last part otherwise
+    
+    if parts:
+        directory_path = os.path.join(SAVE_DIRECTORY, *parts)
+    else:
+        directory_path = SAVE_DIRECTORY
+    save_path = os.path.join(directory_path, filename)
+    
+    return save_path
 
 def download_resources(resource_list, proxy=None, headers=None):
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -95,7 +112,7 @@ def worker(driver, urls_to_visit):
             logging.info("Pausing main tasks to download CDN links")
             return
         
-        current_url = urls_to_visit.pop(0)
+        current_url = urls_to_visit.popleft()
         if current_url in visited_urls:
             logging.debug(f"URL already visited: {current_url}. Skipping.")
             continue
@@ -115,7 +132,7 @@ def worker(driver, urls_to_visit):
                 driver.get(current_url)
                 soup = BeautifulSoup(driver.page_source, 'html.parser')
 
-            save_path = os.path.join(SAVE_DIRECTORY, generate_filename(path))
+            save_path = generate_filename(path)
 
             # Collect image URLs
             resource_list = []
@@ -124,7 +141,8 @@ def worker(driver, urls_to_visit):
                 src = img.get('src')
                 if src:
                     resource_url = urljoin(base_url, src)
-                    resource_path = os.path.join(SAVE_DIRECTORY, 'images', urlparse(resource_url).path.lstrip('/'))
+                    resource_path_parts = ['images'] + urlparse(resource_url).path.strip('/').split('/')
+                    resource_path = os.path.join(SAVE_DIRECTORY, *resource_path_parts)
 
                     if urlparse(resource_url).netloc == urlparse(base_url).netloc:
                         resource_list.append((resource_url, resource_path))
@@ -150,7 +168,6 @@ def worker(driver, urls_to_visit):
 
         except Exception as e:
             logging.error(f"Error processing URL {current_url}: {e}")
-
 
 def setup_driver():
     options = Options()
@@ -212,7 +229,7 @@ def download_cdn_resources(proxy, headers):
     logging.info("CDN resource download completed.")
 
 def main():
-    urls_to_visit = [START_URL]
+    urls_to_visit = deque([START_URL])
 
     proxy_auth = input("Enter proxy details (host:port:user:pass): ")
     proxy, headers = test_proxy(proxy_auth)
