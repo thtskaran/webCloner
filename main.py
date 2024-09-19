@@ -2,6 +2,7 @@ import os
 import logging
 import requests
 import time
+import json
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.firefox.service import Service
@@ -11,6 +12,25 @@ from urllib.parse import urlparse, urljoin
 from base64 import b64encode
 import subprocess
 from collections import deque
+
+# Load configuration from config.json
+with open('config.json') as config_file:
+    config = json.load(config_file)
+
+# Configurations from JSON
+START_URL = config['start_url']
+WEBDRIVER_PATH = config['webdriver_path']
+SAVE_DIRECTORY = config['save_directory']
+REQUEST_DELAY = config['request_delay']
+MAX_WORKERS = config['max_workers']
+RUNNING_PERIOD = config['running_period']
+PAUSE_PERIOD = config['pause_period']
+CAPTCHA_ENABLED = config['captcha_enabled']
+CAPTCHA_TEXT = config['captcha_text']
+USE_PROXY = config['use_proxy']
+PROXY_FILE = config['proxy_file']
+SAVE_MEDIA = config['save_media']
+HEADLESS_BROWSER = config['headless_browser']
 
 # Debug flag
 DEBUG = False
@@ -24,19 +44,46 @@ logging.basicConfig(
     ]
 )
 
-# Configurations
-START_URL = 'http://tryst.link'  # Replace with the target URL
-WEBDRIVER_PATH = 'driver/geckodriver'  # Replace with the path to GeckoDriver
-SAVE_DIRECTORY = './cloned_site'
-REQUEST_DELAY = 0.1  # Reduced delay between requests in seconds
-MAX_WORKERS = 10  # Number of threads for parallel downloading
-RUNNING_PERIOD = 100  # Running period before pausing for CDN download (in seconds)
-PAUSE_PERIOD = 100  # Pause period to download CDN resources (in seconds)
-
 visited_urls = set()
 saved_files = set()
 cdn_links = {}
 first_page_saved = False  # Flag to track if the first page has been saved
+
+def get_proxies():
+    proxies = []
+    if os.path.exists(PROXY_FILE):
+        with open(PROXY_FILE) as f:
+            proxies = [line.strip() for line in f]
+    return proxies
+
+def test_proxy(proxy_auth):
+    try:
+        host, port, user, password = proxy_auth.split(':')
+        proxy = {
+            "http": f"http://{user}:{password}@{host}:{port}",
+            "https": f"https://{user}:{password}@{host}:{port}"
+        }
+        auth_string = f"{user}:{password}"
+        encoded_credentials = b64encode(auth_string.encode()).decode('ascii')
+        headers = {
+            'Proxy-Authorization': f'Basic {encoded_credentials}'
+        }
+
+        response = requests.get('http://httpbin.org/ip', proxies=proxy, headers=headers)
+        response.raise_for_status()
+        ip = response.json().get('origin', '')
+        logging.info(f"Proxy is working. IP: {ip}")
+        return proxy, headers
+    except Exception as e:
+        logging.error(f"Proxy test failed: {e}")
+        return None, None
+
+def get_working_proxy(proxies):
+    for proxy_auth in proxies:
+        proxy, headers = test_proxy(proxy_auth)
+        if proxy:
+            return proxy, headers
+    return None, None
 
 def download_content(url, save_path, proxy=None, headers=None):
     if save_path in saved_files:
@@ -102,7 +149,7 @@ def download_resources(resource_list, proxy=None, headers=None):
             except Exception as e:
                 logging.error(f"Error downloading resource {res[0]}: {e}")
 
-def worker(driver, urls_to_visit):
+def worker(driver, urls_to_visit, proxy, headers):
     start_time = time.time()
 
     while urls_to_visit:
@@ -125,7 +172,7 @@ def worker(driver, urls_to_visit):
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             
             # Check for CAPTCHA
-            if "We don't want unauthorised bots visiting our website." in str(soup):
+            if CAPTCHA_ENABLED and CAPTCHA_TEXT in str(soup):
                 logging.info("CAPTCHA detected. Please complete the CAPTCHA in the browser window.")
                 input("Press Enter after solving the CAPTCHA to continue...")
                 # Reload page after solving CAPTCHA
@@ -144,7 +191,7 @@ def worker(driver, urls_to_visit):
                     resource_path_parts = ['images'] + urlparse(resource_url).path.strip('/').split('/')
                     resource_path = os.path.join(SAVE_DIRECTORY, *resource_path_parts)
 
-                    if urlparse(resource_url).netloc == urlparse(base_url).netloc:
+                    if SAVE_MEDIA and urlparse(resource_url).netloc == urlparse(base_url).netloc:
                         resource_list.append((resource_url, resource_path))
                     else:
                         cdn_links[resource_url] = resource_path
@@ -156,7 +203,8 @@ def worker(driver, urls_to_visit):
             save_html(soup, save_path)
 
             # Download the images
-            download_resources(resource_list)
+            if SAVE_MEDIA:
+                download_resources(resource_list, proxy, headers)
 
             # Add new URLs to visit
             for link in soup.find_all('a', href=True):
@@ -171,32 +219,10 @@ def worker(driver, urls_to_visit):
 
 def setup_driver():
     options = Options()
-    options.headless = True
+    options.headless = HEADLESS_BROWSER
 
     driver = webdriver.Firefox(service=Service(WEBDRIVER_PATH), options=options)
     return driver
-
-def test_proxy(proxy_auth):
-    try:
-        host, port, user, password = proxy_auth.split(':')
-        proxy = {
-            "http": f"http://{user}:{password}@{host}:{port}",
-            "https": f"https://{user}:{password}@{host}:{port}"
-        }
-        auth_string = f"{user}:{password}"
-        encoded_credentials = b64encode(auth_string.encode()).decode('ascii')
-        headers = {
-            'Proxy-Authorization': f'Basic {encoded_credentials}'
-        }
-
-        response = requests.get('http://httpbin.org/ip', proxies=proxy, headers=headers)
-        response.raise_for_status()
-        ip = response.json().get('origin', '')
-        logging.info(f"Proxy is working. IP: {ip}")
-        return proxy, headers
-    except Exception as e:
-        logging.error(f"Proxy test failed: {e}")
-        return None, None
 
 def download_cdn_resources(proxy, headers):
     if not cdn_links:
@@ -214,8 +240,8 @@ def download_cdn_resources(proxy, headers):
             "wget",
             "-e", f"use_proxy=yes",
             "-e", f"http_proxy={proxy_http}",
-            "-e", f"https_proxy={proxy_https}",
-            "-O", path,
+            "-e", f"https_proxy={proxy_https}", 
+                        "-O", path,
             url
         ]
 
@@ -231,18 +257,25 @@ def download_cdn_resources(proxy, headers):
 def main():
     urls_to_visit = deque([START_URL])
 
-    proxy_auth = input("Enter proxy details (host:port:user:pass): ")
-    proxy, headers = test_proxy(proxy_auth)
-    
-    if not proxy:
-        logging.error("Invalid proxy details. Exiting program.")
-        return
+    proxies = get_proxies()
+    if USE_PROXY and proxies:
+        proxy, headers = get_working_proxy(proxies)
+        
+        if not proxy:
+            logging.error("No working proxies found. Exiting program.")
+            return
+    else:
+        proxy, headers = None, None
+
+    if config['headless_browser'] and config['captcha_enabled']:
+        logging.warning("Both headless_browser and captcha_enabled are set to True. Disabling headless mode to handle CAPTCHA.")
+        config['headless_browser'] = False  # Override headless mode
 
     driver = setup_driver()
     if driver:
         while urls_to_visit:
-            worker(driver, urls_to_visit)
-            
+            worker(driver, urls_to_visit, proxy, headers)
+
             logging.info("Paused for CDN download...")
 
             time.sleep(PAUSE_PERIOD)
@@ -250,6 +283,7 @@ def main():
             
             logging.info("Resuming main tasks...")
 
+        # Close the browser after finishing all tasks
         driver.quit()
         logging.info("Closed driver for the current session")
 
