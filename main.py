@@ -106,6 +106,15 @@ def worker(driver, urls_to_visit):
         try:
             driver.get(current_url)
             soup = BeautifulSoup(driver.page_source, 'html.parser')
+            
+            # Check for CAPTCHA
+            if "We don't want unauthorised bots visiting our website." in str(soup):
+                logging.info("CAPTCHA detected. Please complete the CAPTCHA in the browser window.")
+                input("Press Enter after solving the CAPTCHA to continue...")
+                # Reload page after solving CAPTCHA
+                driver.get(current_url)
+                soup = BeautifulSoup(driver.page_source, 'html.parser')
+
             save_path = os.path.join(SAVE_DIRECTORY, generate_filename(path))
 
             # Collect image URLs
@@ -141,6 +150,7 @@ def worker(driver, urls_to_visit):
 
         except Exception as e:
             logging.error(f"Error processing URL {current_url}: {e}")
+
 
 def setup_driver():
     options = Options()
