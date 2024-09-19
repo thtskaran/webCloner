@@ -82,7 +82,7 @@ def generate_filename(url_path):
     if parts and '.' in parts[-1]:
         filename = parts.pop()  # Get the last part if it contains an extension
     else:
-        filename = parts.pop() + '.html'  # Append .html to the last part otherwise
+        filename = parts.pop()  # Use the last part without adding .html
     
     if parts:
         directory_path = os.path.join(SAVE_DIRECTORY, *parts)
@@ -108,7 +108,7 @@ def worker(driver, urls_to_visit):
     while urls_to_visit:
         current_time = time.time()
         
-        if current_time - start_time >= RUNNING_PERIOD:
+        if (current_time - start_time) >= RUNNING_PERIOD:
             logging.info("Pausing main tasks to download CDN links")
             return
         
