@@ -31,6 +31,7 @@ USE_PROXY = config['use_proxy']
 PROXY_FILE = config['proxy_file']
 SAVE_MEDIA = config['save_media']
 HEADLESS_BROWSER = config['headless_browser']
+PAGE_FETCH_DELAY = config['page_fetch_delay']
 
 # Debug flag
 DEBUG = False
@@ -232,6 +233,9 @@ def worker(driver, urls_to_visit, proxy, headers):
                 if linked_url.startswith(base_url) and linked_url not in visited_urls:
                     logging.debug(f"Adding new URL to visit: {linked_url}")
                     urls_to_visit.append(linked_url)
+
+            # Add delay between fetching pages
+            time.sleep(PAGE_FETCH_DELAY)
 
         except Exception as e:
             logging.error(f"Error processing URL {current_url}: {e}")

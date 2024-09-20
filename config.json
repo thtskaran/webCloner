@@ -2,14 +2,15 @@
     "start_url": "http://tryst.link",
     "webdriver_path": "driver/geckodriver",
     "save_directory": "./cloned_site",
-    "request_delay": 0.1,
+    "request_delay": 0.3,
     "max_workers": 60,
-    "running_period": 2000,
+    "running_period": 200,
     "pause_period": 10,
     "captcha_enabled": true,
     "captcha_text": "We don't want unauthorised bots visiting our website.",
     "use_proxy": true,
     "proxy_file": "proxies.txt",
     "save_media": true,
-    "headless_browser": true
+    "headless_browser": true,
+    "page_fetch_delay": 1
 }
