@@ -118,25 +118,27 @@ def process_url(url):
 
 def generate_filename(url_path):
     global first_page_saved
-    
+
     if not first_page_saved:
         first_page_saved = True
         return os.path.join(SAVE_DIRECTORY, 'index.html')
-    
+
     parts = url_path.strip('/').split('/')
-    
+
     # Determine filename from last part
     if parts and '.' in parts[-1]:
         filename = parts.pop()  # Get the last part if it contains an extension
     else:
         filename = parts.pop()  # Use the last part without adding .html
-    
+
     if parts:
         directory_path = os.path.join(SAVE_DIRECTORY, *parts)
+        ensure_dir(directory_path)
     else:
         directory_path = SAVE_DIRECTORY
+
     save_path = os.path.join(directory_path, filename)
-    
+
     return save_path
 
 def download_resources(resource_list, proxy=None, headers=None):
