@@ -108,9 +108,28 @@ def save_html(soup, path):
         logging.info(f"HTML file already saved: {path}")
         return
     ensure_dir(os.path.dirname(path))
+
+    # Check if the file or directory conflict exists
+    if os.path.exists(path):
+        if os.path.isfile(path):
+            logging.info(f"File exists where a directory is needed: {path}")
+            handle_file_to_dir_conversion(path)
+    
     with open(path, 'w', encoding='utf-8') as file:
         file.write(str(soup.prettify()))
     saved_files.add(path)
+
+def handle_file_to_dir_conversion(file_path):
+    directory_path = file_path.rstrip('.html')
+
+    # Create new directory
+    os.makedirs(directory_path)
+
+    # Move the file into the directory as index.html
+    new_file_path = os.path.join(directory_path, 'index.html')
+    os.rename(file_path, new_file_path)
+
+    logging.info(f"Converted file {file_path} to directory {directory_path} with index.html")
 
 def process_url(url):
     parsed_url = urlparse(url)
@@ -118,27 +137,25 @@ def process_url(url):
 
 def generate_filename(url_path):
     global first_page_saved
-
+    
     if not first_page_saved:
         first_page_saved = True
         return os.path.join(SAVE_DIRECTORY, 'index.html')
-
+    
     parts = url_path.strip('/').split('/')
-
+    
     # Determine filename from last part
     if parts and '.' in parts[-1]:
         filename = parts.pop()  # Get the last part if it contains an extension
     else:
-        filename = parts.pop()  # Use the last part without adding .html
-
+        filename = 'index.html'
+    
     if parts:
         directory_path = os.path.join(SAVE_DIRECTORY, *parts)
-        ensure_dir(directory_path)
     else:
         directory_path = SAVE_DIRECTORY
-
     save_path = os.path.join(directory_path, filename)
-
+    
     return save_path
 
 def download_resources(resource_list, proxy=None, headers=None):
@@ -243,7 +260,7 @@ def download_cdn_resources(proxy, headers):
             "-e", f"use_proxy=yes",
             "-e", f"http_proxy={proxy_http}",
             "-e", f"https_proxy={proxy_https}", 
-                        "-O", path,
+            "-O", path,
             url
         ]
 
@@ -254,7 +271,7 @@ def download_cdn_resources(proxy, headers):
         except subprocess.CalledProcessError as e:
             logging.error(f"Error downloading {url} via wget: {e}")
 
-    logging.info("CDN resource download completed.")
+        logging.info(f"Downloaded CDN resources to {path}")
 
 def main():
     urls_to_visit = deque([START_URL])
@@ -287,7 +304,7 @@ def main():
 
         # Close the browser after finishing all tasks
         driver.quit()
-        logging.info("Closed driver for the current session")
+        logging.info("Closed driver for the current session.")
 
     logging.info("Site cloning completed.")
 
