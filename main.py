@@ -280,8 +280,6 @@ def download_cdn_resources(proxy, headers):
         except subprocess.CalledProcessError as e:
             logging.error(f"Error downloading {url} via wget: {e}")
 
-        logging.info(f"Downloaded CDN resources to {path}")
-
 def save_state():
     state = {
         'visited_urls': list(visited_urls),
@@ -289,7 +287,7 @@ def save_state():
         'cdn_links': cdn_links
     }
     with open(STATE_FILE, 'w') as f:
-        json.dump(state, f)
+        json.dump(state, f, indent=4)  # Beautify the JSON
     logging.info("State saved to file.")
 
 def load_state():
@@ -315,7 +313,7 @@ def input_monitor():
             if enter_press_count >= 3:
                 logging.info("Detected triple Enter key press. Pausing and saving state...")
                 save_state()
-                break
+                os._exit(0)  # Exit the program after saving state
         else:
             enter_press_count = 0
 
@@ -364,4 +362,4 @@ def main():
     logging.info("Site cloning completed.")
 
 if __name__ == "__main__":
-    main() 
+    main()
