@@ -12,6 +12,7 @@ from urllib.parse import urlparse, urljoin
 from base64 import b64encode
 import subprocess
 from collections import deque
+import threading
 
 # Load configuration from config.json
 with open('config.json') as config_file:
@@ -36,6 +37,9 @@ PAGE_FETCH_DELAY = config['page_fetch_delay']
 # Debug flag
 DEBUG = False
 
+# State tracking files
+STATE_FILE = 'scraper_state.json'
+
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -49,6 +53,7 @@ visited_urls = set()
 saved_files = set()
 cdn_links = {}
 first_page_saved = False  # Flag to track if the first page has been saved
+urls_to_visit = deque()
 
 def get_proxies():
     proxies = []
@@ -277,8 +282,45 @@ def download_cdn_resources(proxy, headers):
 
         logging.info(f"Downloaded CDN resources to {path}")
 
+def save_state():
+    state = {
+        'visited_urls': list(visited_urls),
+        'urls_to_visit': list(urls_to_visit),
+        'cdn_links': cdn_links
+    }
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
+    logging.info("State saved to file.")
+
+def load_state():
+    global visited_urls, urls_to_visit, cdn_links
+
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            state = json.load(f)
+            visited_urls = set(state['visited_urls'])
+            urls_to_visit = deque(state['urls_to_visit'])
+            cdn_links = state['cdn_links']
+        logging.info("Resumed state from file.")
+    else:
+        urls_to_visit.append(START_URL)
+        logging.info("Starting fresh state.")
+
+def input_monitor():
+    enter_press_count = 0
+    while True:
+        key = input()
+        if key == "":
+            enter_press_count += 1
+            if enter_press_count >= 3:
+                logging.info("Detected triple Enter key press. Pausing and saving state...")
+                save_state()
+                break
+        else:
+            enter_press_count = 0
+
 def main():
-    urls_to_visit = deque([START_URL])
+    load_state()
 
     proxies = get_proxies()
     if USE_PROXY and proxies:
@@ -296,21 +338,30 @@ def main():
 
     driver = setup_driver()
     if driver:
-        while urls_to_visit:
-            worker(driver, urls_to_visit, proxy, headers)
+        input_thread = threading.Thread(target=input_monitor)
+        input_thread.start()
+        
+        try:
+            while urls_to_visit:
+                worker(driver, urls_to_visit, proxy, headers)
 
-            logging.info("Paused for CDN download...")
+                logging.info("Paused for CDN download...")
 
-            time.sleep(PAUSE_PERIOD)
-            download_cdn_resources(proxy, headers)
-            
-            logging.info("Resuming main tasks...")
+                time.sleep(PAUSE_PERIOD)
+                download_cdn_resources(proxy, headers)
+                
+                logging.info("Resuming main tasks...")
 
-        # Close the browser after finishing all tasks
-        driver.quit()
-        logging.info("Closed driver for the current session.")
+        except KeyboardInterrupt:
+            logging.info("Interrupted by user. Saving state...")
+            save_state()
+
+        finally:
+            input_thread.join()  # Ensure input monitoring thread has finished
+            driver.quit()
+            logging.info("Closed driver for the current session.")
 
     logging.info("Site cloning completed.")
 
 if __name__ == "__main__":
-    main()
+    main() 
