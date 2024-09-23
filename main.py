@@ -39,6 +39,7 @@ DEBUG = False
 
 # State tracking files
 STATE_FILE = 'scraper_state.json'
+CDN_STATE_FILE = 'cdn_state.json'
 
 # Configure logging
 logging.basicConfig(
@@ -284,25 +285,53 @@ def save_state():
     state = {
         'visited_urls': list(visited_urls),
         'urls_to_visit': list(urls_to_visit),
-        'cdn_links': cdn_links
+        'first_page_saved': first_page_saved  # Save the first_page_saved flag
     }
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f, indent=4)  # Beautify the JSON
     logging.info("State saved to file.")
+    save_cdn_state()
 
 def load_state():
-    global visited_urls, urls_to_visit, cdn_links
+    global visited_urls, urls_to_visit, first_page_saved
 
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
             state = json.load(f)
             visited_urls = set(state['visited_urls'])
             urls_to_visit = deque(state['urls_to_visit'])
-            cdn_links = state['cdn_links']
+            first_page_saved = state.get('first_page_saved', False)  # Load the first_page_saved flag
         logging.info("Resumed state from file.")
     else:
         urls_to_visit.append(START_URL)
         logging.info("Starting fresh state.")
+    load_cdn_state()
+
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            state = json.load(f)
+            visited_urls = set(state['visited_urls'])
+            urls_to_visit = deque(state['urls_to_visit'])
+            first_page_saved = state.get('first_page_saved', False)  # Load the first_page_saved flag
+        logging.info("Resumed state from file.")
+    else:
+        urls_to_visit.append(START_URL)
+        logging.info("Starting fresh state.")
+    load_cdn_state()
+
+    
+def save_cdn_state():
+    with open(CDN_STATE_FILE, 'w') as f:
+        json.dump(cdn_links, f, indent=4)  # Beautify the JSON
+    logging.info("CDN state saved to file.")
+
+def load_cdn_state():
+    global cdn_links
+
+    if os.path.exists(CDN_STATE_FILE):
+        with open(CDN_STATE_FILE, 'r') as f:
+            cdn_links = json.load(f)
+        logging.info("Resumed CDN state from file.")
 
 def input_monitor():
     enter_press_count = 0
@@ -340,9 +369,31 @@ def main():
         input_thread.start()
         
         try:
+            # Always ensure we start with the START_URL
+            current_url = START_URL
+            logging.info(f"Loading START_URL: {current_url}")
+            
+            try:
+                driver.get(current_url)
+                time.sleep(2)  # Wait for 2 seconds before proceeding
+                
+                soup = BeautifulSoup(driver.page_source, 'html.parser')
+                save_path = generate_filename(process_url(current_url)[1])
+                save_html(soup, save_path)
+                visited_urls.add(current_url)
+                
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    linked_url = urljoin(process_url(current_url)[0], href)
+                    if linked_url.startswith(process_url(current_url)[0]) and linked_url not in visited_urls:
+                        urls_to_visit.append(linked_url)
+
+            except Exception as e:
+                logging.error(f"Error processing START_URL {current_url}: {e}")
+
             while urls_to_visit:
                 worker(driver, urls_to_visit, proxy, headers)
-
+                
                 logging.info("Paused for CDN download...")
 
                 time.sleep(PAUSE_PERIOD)
