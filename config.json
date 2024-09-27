@@ -1,5 +1,5 @@
 {
-    "start_url": "http://tryst.link",
+    "start_url": "http://eros.com",
     "webdriver_path": "driver/geckodriver",
     "save_directory": "./cloned_site",
     "request_delay": 0.3,
